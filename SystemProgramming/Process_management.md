@@ -196,3 +196,38 @@ int main() {
     exit(1);
 }
 ```
+
+#### wait() 시스템콜
+* wait() 함수를 사용하면, fork() 함수 호출시, 자식 프로세스가 종료할 때까지, 부모 프로세스가 기다림
+* 자식 프로세스와 부모 프로세스의 동기화, 부모 프로세스가 자식 프로세스보다 먼저 죽는 경우를 막기 위해 사용(고아 프로세스)
+  * 먼저 죽는 경우 고아프로세스, 또는 좀비프로세스라고 함
+  
+``` 
+int main() {
+  int pid;
+  int child_pid;
+  int status;
+  pid = fork(); // 새로운 프로세스공간(부모프로세스에 기초한)
+  switch (pid) {
+    case -1:
+      perror("포크가 실패했다\n");
+      break;
+    case 0: //자식프로세스
+       execl("/bin/ls", "ls", "-al", NULL); // ls 바이너리로 덮어씌우고 끝나면 부모프로세스에 시그널을보냄
+       perror("execl 실패했다\n");
+       break;
+    default:  // 부모프로세스
+       child_pid = wait(NULL); // 기다림 - (자식프로세스가 끝날때까지 시그널을 기다림)
+       printf("ls가 완료됐다\n");
+       printf(getpid(), child_pid);
+       exit(0);     
+  }
+}
+```
+
+#### fork(), execl(), wait() 시스템콜
+* execl()만 사용하면, 부모 프로세스가 사라짐
+* 이를 유지하기 위해, fork()로 새로운 프로세스 공간 복사 후, execl() 사용
+* wait() 함수를 사용해서 부모 프로세스가 자식 프로세스가 끝날 때까지 기다릴 수 있음
+> 쉘 프로그램은 fork(), exec()계열, wait() 함수를 기반으로 작성 가능
+
