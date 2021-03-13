@@ -201,6 +201,8 @@ int main() {
 * wait() 함수를 사용하면, fork() 함수 호출시, 자식 프로세스가 종료할 때까지, 부모 프로세스가 기다림
 * 자식 프로세스와 부모 프로세스의 동기화, 부모 프로세스가 자식 프로세스보다 먼저 죽는 경우를 막기 위해 사용(고아 프로세스)
   * 먼저 죽는 경우 고아프로세스, 또는 좀비프로세스라고 함
+* 자식 프로세스가 종료되면 좀비 프로세스가 되어 해당 프로세스 조사를 위한 최소 정보만 가지고 있는 상태가 됨
+* 완전히 끝나면, 해당 정보도 삭제되고, 부모 프로세스에 SIGCHLD 시그널이 보내짐  
   
 ``` 
 int main() {
@@ -225,9 +227,121 @@ int main() {
 }
 ```
 
+* wait() 리턴 값
+    * 에러가 발생한 경우
+```
+#include <sys/wait.h>
+pid_t wait (int *status) // status 자식 종료상태 값 exit(int status) exit는 종료상태값으로 자식프로세스를 종료한다
+// 리턴값은 종료된 자식 프로세스의 pid
+```
+
+* status 정보를 통해 기본적인 자식 프로세스 관련 정보를 확인할 수 있음
+    * 예 :
+    ```
+    int WIFEXITED(status); // 자식 프로세스가 정상 종료 시 리턴 값은 0이 아닌 값이 됨
+    ```
+
+
 #### fork(), execl(), wait() 시스템콜
 * execl()만 사용하면, 부모 프로세스가 사라짐
 * 이를 유지하기 위해, fork()로 새로운 프로세스 공간 복사 후, execl() 사용
 * wait() 함수를 사용해서 부모 프로세스가 자식 프로세스가 끝날 때까지 기다릴 수 있음
 > 쉘 프로그램은 fork(), exec()계열, wait() 함수를 기반으로 작성 가능
 
+
+#### copy-on-write
+* 기존 fork()는 통으로 프로세스를 복사하는데, 메모리 영역이 크다면 그만큼 부하도 크다
+* 따라서 더 나은 속도로 프로세스를 복사하는 방식이 필요하다
+* 자식프로세스 생성시, 부모 프로세스 페이지를 '우선'사용
+* 부모 또는 자식 프로세스가 해당 페이지를 읽기가 아닌, 쓰기를 할 때
+    * 이 때 페이지를 복사하고, 분리함
+* 장점
+    * 프로세스 생성 시간을 줄일 수 있음
+    * 새로 생성된 프로세스에 새롭게 할당되어야 하는 페이지 수도 최소화.
+
+* 읽을 때
+    * 자식 프로세스 생성시, 부모 프로세스에서 사용하는 페이지를 그대로 사용(데이터 영역 자체는 같은 곳이고 어떤 포인터로 볼건지만 다른 개념)
+* 쓸 때
+    * 해당 요청 영역에 대한 실제 메모리에 저장된 데이터를 복사함, 이후 페이지 포인터를 변경하여 복사한 영역을 바라보게함
+
+#### 프로세스 종료
+* exit() 시스템콜: 프로세스 종료
+```
+#include <stdlib.h>
+void exit(int status); // status - 프로세스 종료 상태번호
+```
+* main 함수의 return 0; 와 exit(0); 의 차이는?
+    * exit() 함수: 즉시 프로세스를 종료함 (exit() 함수 다음에 있는 코드는 실행되지 않음)
+    * return 0: 단지 main() 이라는 함수를 종료함
+        * 단, main()에서 return 시, C언어 실행 파일에 기본으로 포함된 _start()함수를 호출하게 되고, 해당 함수는 결국 exit() 함수를 호출함
+> main() 함수에서 return 0;은 exit() 호출과 큰 차이가 없음    
+
+* 부모 프로세스는 status & 0377(비트연산) 계산 값으로 자식 프로세스 종료 상태 확인 가능
+* 기본 사용 예
+```
+exit(EXIT_SUCCESS); // 0
+exit(EXIT_FAILURE); // 1
+```
+
+#### exit() 시스템콜
+* exit() 시스템콜 주요 동작
+    * atexit() 에 등록된 함수 실행
+    * 열려 있는 모든 입출력 스트림 버퍼 삭제 - ex) stdin, stdout, stderr 등 '파일'처럼 다뤄지는 것들
+    * 프로세스가 오픈한 파일을 모두 닫음
+    * tmpfile() 함수를 통해 생성한 임시 파일 삭제
+        * 참고: tmpfile() - 임시 파일을 wb+ (쓸 수 있는 이진파일 형태) 모드로 오픈가능
+        ```
+        #include <stdio.h>
+        FILE *tmpfile(void);
+        ```
+* atexit() 함수
+    * 프로세스 종료시 실행될 함수를 등록하기 위해 사용
+    * 등록된 함수를 등록된 역순서대로 실행
+
+* atexit() 함수 예제
+```
+int main(void) {
+    void exithandling(void);
+    void goodbyemessage(void);
+    int ret;
+
+    ret = atexit(exithandling);
+    if (ret != 0) perror("Error in atexit\n");
+    ret = atexit(goodbyemessage);
+    if (ret != 0) perror("Error in atexit\n");
+    exit(EXIT_SUCCESS);
+}
+
+void exithandling(void) {
+    printf("exit handling\n");
+}
+
+void goodbyemessage(void) {
+    printf("see you again!\n");
+}
+
+```
+
+#### nice() 시스템콜 : 우선순위 변경하기
+* 프로세스 중 사실상 root가 소유한 프로세스만, 우선순위를 높일 수 있음
+    * 다른 프로세스는 우선순위를 낮출 수만 있음
+    * 스케쥴링방식에 따라 우선순위가 적용될수도 있고 안될 수도 있음
+
+#### getpriority(), setpriority() 
+```
+#include <sys/resource.h>
+int getpriority(int which, id_t who);
+int setpriority(int which, id_t who, int value); // value 가 우선순위 값
+```
+* which: 프로세스(PRIO_PROCESS), 프로세스 그룹(PRIO_PGRP), 사용자(PRIO_USER) 별로 우선순위를 가져올 수 있음
+
+* 예제 - priority.c(root 소유로 실행)
+    * 이외에 스케쥴링 조작 시스템콜 기본 제공(POSIX 기반), 스케쥴링 알고리즘 변경으로 사용은 어려움
+```
+#include <sys/resource.h>
+int which = PRIO_PROCESS;
+id_t pid;
+int ret; 
+pid = getpid();
+ret = getpriority(which, pid);
+```
